@@ -113,7 +113,7 @@ method_configs["bakedangelo"] = Config(
     trainer=TrainerConfig(
         steps_per_eval_image=5000,
         steps_per_eval_batch=5000,
-        steps_per_save=20000,
+        steps_per_save=1000,
         steps_per_eval_all_images=1000000,  # set to a very large model so we don't eval with all images
         max_num_iterations=1000_001,
         mixed_precision=False,
@@ -121,7 +121,7 @@ method_configs["bakedangelo"] = Config(
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             dataparser=SDFStudioDataParserConfig(),
-            train_num_rays_per_batch=8192,
+            train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=1024,
             camera_optimizer=CameraOptimizerConfig(
                 mode="off", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)

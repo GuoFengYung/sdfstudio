@@ -158,7 +158,7 @@ class SurfaceModel(Model):
         self.field = self.config.sdf_field.setup(
             aabb=self.scene_box.aabb,
             # spatial_distortion=self.scene_contraction,
-            spatial_distortion = None,
+            spatial_distortion=None,
             num_images=self.num_train_data,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
         )
@@ -222,7 +222,9 @@ class SurfaceModel(Model):
 
         # losses
         self.rgb_loss = L1Loss()
-        self.s3im_loss = S3IM(s3im_kernel_size=self.config.s3im_kernel_size, s3im_stride=self.config.s3im_stride, s3im_repeat_time=self.config.s3im_repeat_time, s3im_patch_height=self.config.s3im_patch_height)
+        self.s3im_loss = S3IM(s3im_kernel_size=self.config.s3im_kernel_size, s3im_stride=self.config.s3im_stride,
+                              s3im_repeat_time=self.config.s3im_repeat_time,
+                              s3im_patch_height=self.config.s3im_patch_height)
 
         self.eikonal_loss = MSELoss()
         self.depth_loss = ScaleAndShiftInvariantLoss(alpha=0.5, scales=1)
@@ -279,12 +281,12 @@ class SurfaceModel(Model):
         field_outputs_bg[FieldHeadNames.ALPHA] = ray_samples.get_alphas(field_outputs_bg[FieldHeadNames.DENSITY])
 
         field_outputs[FieldHeadNames.ALPHA] = (
-            field_outputs[FieldHeadNames.ALPHA] * inside_sphere_mask
-            + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.ALPHA]
+                field_outputs[FieldHeadNames.ALPHA] * inside_sphere_mask
+                + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.ALPHA]
         )
         field_outputs[FieldHeadNames.RGB] = (
-            field_outputs[FieldHeadNames.RGB] * inside_sphere_mask
-            + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.RGB]
+                field_outputs[FieldHeadNames.RGB] * inside_sphere_mask
+                + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.RGB]
         )
 
         # TODO make everything outside the sphere to be 0
@@ -413,7 +415,7 @@ class SurfaceModel(Model):
                 fg_label = batch["fg_mask"].float().to(self.device)
                 weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
                 loss_dict["fg_mask_loss"] = (
-                    F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                        F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
                 )
 
             # monocular normal loss
@@ -421,7 +423,7 @@ class SurfaceModel(Model):
                 normal_gt = batch["normal"].to(self.device)
                 normal_pred = outputs["normal"]
                 loss_dict["normal_loss"] = (
-                    monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
+                        monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
                 )
 
             # monocular depth loss
@@ -433,15 +435,15 @@ class SurfaceModel(Model):
 
                 mask = torch.ones_like(depth_gt).reshape(1, 32, -1).bool()
                 loss_dict["depth_loss"] = (
-                    self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
-                    * self.config.mono_depth_loss_mult
+                        self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
+                        * self.config.mono_depth_loss_mult
                 )
 
             # sensor depth loss
             if "sensor_depth" in batch and (
-                self.config.sensor_depth_l1_loss_mult > 0.0
-                or self.config.sensor_depth_freespace_loss_mult > 0.0
-                or self.config.sensor_depth_sdf_loss_mult > 0.0
+                    self.config.sensor_depth_l1_loss_mult > 0.0
+                    or self.config.sensor_depth_freespace_loss_mult > 0.0
+                    or self.config.sensor_depth_sdf_loss_mult > 0.0
             ):
                 l1_loss, free_space_loss, sdf_loss = self.sensor_depth_loss(batch, outputs)
 
@@ -455,7 +457,7 @@ class SurfaceModel(Model):
                 patches_valid_mask = outputs["patches_valid_mask"]
 
                 loss_dict["patch_loss"] = (
-                    self.patch_loss(patches, patches_valid_mask) * self.config.patch_warp_loss_mult
+                        self.patch_loss(patches, patches_valid_mask) * self.config.patch_warp_loss_mult
                 )
 
             # sparse points sdf loss
@@ -463,7 +465,7 @@ class SurfaceModel(Model):
                 sparse_sfm_points = batch["sparse_sfm_points"].to(self.device)
                 sparse_sfm_points_sdf = self.field.forward_geonetwork(sparse_sfm_points)[:, 0].contiguous()
                 loss_dict["sparse_sfm_points_sdf_loss"] = (
-                    torch.mean(torch.abs(sparse_sfm_points_sdf)) * self.config.sparse_points_sdf_loss_mult
+                        torch.mean(torch.abs(sparse_sfm_points_sdf)) * self.config.sparse_points_sdf_loss_mult
                 )
 
             # total variational loss for multi-resolution periodic feature volume
@@ -480,7 +482,7 @@ class SurfaceModel(Model):
         return metrics_dict
 
     def get_image_metrics_and_images(
-        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
+            self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         image = batch["image"].to(self.device)
         rgb = outputs["rgb"]
