@@ -157,7 +157,8 @@ class SurfaceModel(Model):
         # Fields
         self.field = self.config.sdf_field.setup(
             aabb=self.scene_box.aabb,
-            spatial_distortion=self.scene_contraction,
+            # spatial_distortion=self.scene_contraction,
+            spatial_distortion = None,
             num_images=self.num_train_data,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
         )

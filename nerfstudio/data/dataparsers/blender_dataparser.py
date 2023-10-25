@@ -1,4 +1,4 @@
-# Copyright 2022 The Nerfstudio Team. All rights reserved.
+# Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import imageio
 import numpy as np
 import torch
 
-from nerfstudio.cameras.cameras import Cameras, CameraType
+from nerfstudio.cameras.cameras import Cameras, CameraType, CAMERA_MODEL_TO_TYPE
 from nerfstudio.data.dataparsers.base_dataparser import (
     DataParser,
     DataParserConfig,
@@ -32,6 +32,8 @@ from nerfstudio.data.dataparsers.base_dataparser import (
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.io import load_from_json
+from nerfstudio.cameras import camera_utils
+from nerfstudio.utils.rich_utils import CONSOLE
 
 
 @dataclass
@@ -71,32 +73,110 @@ class Blender(DataParser):
         meta = load_from_json(self.data / f"transforms_{split}.json")
         image_filenames = []
         poses = []
+
+        fx_fixed = "fl_x" in meta
+        fy_fixed = "fl_y" in meta
+        cx_fixed = "cx" in meta
+        cy_fixed = "cy" in meta
+        height_fixed = "h" in meta
+        width_fixed = "w" in meta
+        distort_fixed = False
+        for distort_key in ["k1", "k2", "k3", "p1", "p2"]:
+            if distort_key in meta:
+                distort_fixed = True
+                break
+        fx = []
+        fy = []
+        cx = []
+        cy = []
+        height = []
+        width = []
+        distort = []
+
         for frame in meta["frames"]:
-            fname = self.data / Path(frame["file_path"].replace("./", "") + ".png")
+            fname = self.data / Path(frame["file_path"].replace("./", ""))
+
+            if not fx_fixed:
+                assert "fl_x" in frame, "fx not specified in frame"
+                fx.append(float(frame["fl_x"]))
+            if not fy_fixed:
+                assert "fl_y" in frame, "fy not specified in frame"
+                fy.append(float(frame["fl_y"]))
+            if not cx_fixed:
+                assert "cx" in frame, "cx not specified in frame"
+                cx.append(float(frame["cx"]))
+            if not cy_fixed:
+                assert "cy" in frame, "cy not specified in frame"
+                cy.append(float(frame["cy"]))
+            if not height_fixed:
+                assert "h" in frame, "height not specified in frame"
+                height.append(int(frame["h"]))
+            if not width_fixed:
+                assert "w" in frame, "width not specified in frame"
+                width.append(int(frame["w"]))
+            if not distort_fixed:
+                distort.append(
+                    camera_utils.get_distortion_params(
+                        k1=float(frame["k1"]) if "k1" in frame else 0.0,
+                        k2=float(frame["k2"]) if "k2" in frame else 0.0,
+                        k3=float(frame["k3"]) if "k3" in frame else 0.0,
+                        k4=float(frame["k4"]) if "k4" in frame else 0.0,
+                        p1=float(frame["p1"]) if "p1" in frame else 0.0,
+                        p2=float(frame["p2"]) if "p2" in frame else 0.0,
+                    )
+                )
+
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
         poses = np.array(poses).astype(np.float32)
 
-        img_0 = imageio.imread(image_filenames[0])
-        image_height, image_width = img_0.shape[:2]
-        camera_angle_x = float(meta["camera_angle_x"])
-        focal_length = 0.5 * image_width / np.tan(0.5 * camera_angle_x)
+        # img_0 = imageio.v2.imread(image_filenames[0])
+        # image_height, image_width = img_0.shape[:2]
+        # camera_angle_x = float(meta["camera_angle_x"])
+        # focal_length = 0.5 * image_width / np.tan(0.5 * camera_angle_x)
 
-        cx = image_width / 2.0
-        cy = image_height / 2.0
+        # cx = image_width / 2.0
+        # cy = image_height / 2.0
         camera_to_world = torch.from_numpy(poses[:, :3])  # camera to world transform
 
         # in x,y,z order
         camera_to_world[..., 3] *= self.scale_factor
         scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
 
+        if "camera_model" in meta:
+            camera_type = CAMERA_MODEL_TO_TYPE[meta["camera_model"]]
+        else:
+            camera_type = CameraType.PERSPECTIVE
+
+        fx = float(meta["fl_x"]) if fx_fixed else torch.tensor(fx, dtype=torch.float32)
+        fy = float(meta["fl_y"]) if fy_fixed else torch.tensor(fy, dtype=torch.float32)
+        cx = float(meta["cx"]) if cx_fixed else torch.tensor(cx, dtype=torch.float32)
+        cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)
+        height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)
+        width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)
+        print(fx, fy)
+        if distort_fixed:
+            distortion_params = camera_utils.get_distortion_params(
+                k1=float(meta["k1"]) if "k1" in meta else 0.0,
+                k2=float(meta["k2"]) if "k2" in meta else 0.0,
+                k3=float(meta["k3"]) if "k3" in meta else 0.0,
+                k4=float(meta["k4"]) if "k4" in meta else 0.0,
+                p1=float(meta["p1"]) if "p1" in meta else 0.0,
+                p2=float(meta["p2"]) if "p2" in meta else 0.0,
+            )
+        else:
+            distortion_params = torch.stack(distort, dim=0)
+
         cameras = Cameras(
             camera_to_worlds=camera_to_world,
-            fx=focal_length,
-            fy=focal_length,
+            fx=fx,
+            fy=fy,
             cx=cx,
             cy=cy,
-            camera_type=CameraType.PERSPECTIVE,
+            distortion_params=distortion_params,
+            height=height,
+            width=width,
+            camera_type=camera_type,
         )
 
         dataparser_outputs = DataparserOutputs(
@@ -104,6 +184,7 @@ class Blender(DataParser):
             cameras=cameras,
             alpha_color=alpha_color_tensor,
             scene_box=scene_box,
+            # dataparser_scale=self.scale_factor,
         )
 
         return dataparser_outputs
