@@ -182,7 +182,8 @@ class SurfaceModel(Model):
         if self.config.background_model == "grid":
             self.field_background = TCNNNerfactoField(
                 self.scene_box.aabb,
-                spatial_distortion=self.scene_contraction,
+                # spatial_distortion=self.scene_contraction,
+                spatial_distortion=None,
                 num_images=self.num_train_data,
                 use_average_appearance_embedding=self.config.use_average_appearance_embedding,
             )
@@ -197,7 +198,8 @@ class SurfaceModel(Model):
             self.field_background = NeRFField(
                 position_encoding=position_encoding,
                 direction_encoding=direction_encoding,
-                spatial_distortion=self.scene_contraction,
+                # spatial_distortion=self.scene_contraction,
+                spatial_distortion=None,
             )
         else:
             # dummy background model
@@ -400,14 +402,20 @@ class SurfaceModel(Model):
     def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict:
         loss_dict = {}
         image = batch["image"].to(self.device)
-        loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
+        pred_rgb, gt_rgb = self.renderer_rgb.blend_background_for_loss_computation(
+            pred_image=outputs["rgb"],
+            pred_accumulation=outputs["accumulation"],
+            gt_image=image,
+        )
+
+        loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
         if self.training:
             # eikonal loss
             grad_theta = outputs["eik_grad"]
             loss_dict["eikonal_loss"] = ((grad_theta.norm(2, dim=-1) - 1) ** 2).mean() * self.config.eikonal_loss_mult
             # s3im loss
             if self.config.s3im_loss_mult > 0:
-                loss_dict["s3im_loss"] = self.s3im_loss(image, outputs["rgb"]) * self.config.s3im_loss_mult
+                loss_dict["s3im_loss"] = self.s3im_loss(gt_rgb, pred_rgb) * self.config.s3im_loss_mult
             # foreground mask loss
             if "fg_mask" in batch and self.config.fg_mask_loss_mult > 0.0:
                 fg_label = batch["fg_mask"].float().to(self.device)
@@ -475,15 +483,17 @@ class SurfaceModel(Model):
 
     def get_metrics_dict(self, outputs, batch) -> Dict:
         metrics_dict = {}
-        image = batch["image"].to(self.device)
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        gt_rgb = batch["image"].to(self.device)
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)  # Blend if RGBA
+        metrics_dict["psnr"] = self.psnr(outputs["rgb"], gt_rgb)
         return metrics_dict
 
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        image = batch["image"].to(self.device)
-        rgb = outputs["rgb"]
+        gt_rgb = batch["image"].to(self.device)
+        predicted_rgb = outputs["rgb"]  # Blended with background (black if random background)
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)
         acc = colormaps.apply_colormap(outputs["accumulation"])
 
         normal = outputs["normal"]
@@ -491,7 +501,7 @@ class SurfaceModel(Model):
         # normal = torch.nn.functional.normalize(normal, p=2, dim=-1)
         normal = (normal + 1.0) / 2.0
 
-        combined_rgb = torch.cat([image, rgb], dim=1)
+        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
         if "depth" in batch:
             depth_gt = batch["depth"].to(self.device)
@@ -534,12 +544,12 @@ class SurfaceModel(Model):
             images_dict["sensor_depth"] = combined_sensor_depth
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-        image = torch.moveaxis(image, -1, 0)[None, ...]
-        rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
+        gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
+        predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
 
-        psnr = self.psnr(image, rgb)
-        ssim = self.ssim(image, rgb)
-        lpips = self.lpips(image, rgb)
+        psnr = self.psnr(gt_rgb, predicted_rgb)
+        ssim = self.ssim(gt_rgb, predicted_rgb)
+        lpips = self.lpips(gt_rgb, predicted_rgb)
 
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
