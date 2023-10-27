@@ -159,13 +159,11 @@ class Blender(DataParser):
                 )
             if self.config.include_foreground_mask:
                 # load foreground mask
-                print(self.data, frame)
                 foreground_mask = np.array(Image.open(self.data / frame["mask_file_path"]), dtype="uint8")
-                print(self.data / frame["mask_file_path"])
                 assert "mask_file_path" in frame, "mask_file_path not specified in frame"
                 foreground_mask = foreground_mask[..., :1]
                 foreground_mask_images.append(torch.from_numpy(foreground_mask).float() / 255.0)
-
+            print(foreground_mask_images)
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
