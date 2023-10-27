@@ -259,7 +259,12 @@ class BakedSDFFactoModel(VolSDFModel):
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = {}
         image = batch["image"].to(self.device)
-        loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
+        pred_rgb, gt_rgb = self.renderer_rgb.blend_background_for_loss_computation(
+            pred_image=outputs["rgb"],
+            pred_accumulation=outputs["accumulation"],
+            gt_image=image,
+        )
+        loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
 
         if self.training:
             # eikonal loss
@@ -273,7 +278,7 @@ class BakedSDFFactoModel(VolSDFModel):
                 )
             # s3im loss
             if self.config.s3im_loss_mult > 0:
-                loss_dict["s3im_loss"] = self.s3im_loss(image, outputs["rgb"]) * self.config.s3im_loss_mult
+                loss_dict["s3im_loss"] = self.s3im_loss(gt_rgb, pred_rgb) * self.config.s3im_loss_mult
             if self.config.use_spatial_varying_eikonal_loss:
 
                 points_norm = outputs["points_norm"][..., 0]
