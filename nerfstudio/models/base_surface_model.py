@@ -417,8 +417,8 @@ class SurfaceModel(Model):
             if self.config.s3im_loss_mult > 0:
                 loss_dict["s3im_loss"] = self.s3im_loss(gt_rgb, pred_rgb) * self.config.s3im_loss_mult
             # foreground mask loss
-            if "mask_filenames" in batch and self.config.fg_mask_loss_mult > 0.0:
-                fg_label = batch["fg_mask"].float().to(self.device)
+            if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
+                fg_label = batch["mask"].float().to(self.device)
                 weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
                 loss_dict["fg_mask_loss"] = (
                     F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
