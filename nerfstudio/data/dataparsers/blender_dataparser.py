@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Type, Literal
-
+from PIL import Image
 import imageio
 import numpy as np
 import torch
@@ -35,6 +35,26 @@ from nerfstudio.utils.io import load_from_json
 from nerfstudio.cameras import camera_utils
 from nerfstudio.utils.rich_utils import CONSOLE
 
+
+def get_foreground_masks(image_idx: int, fg_masks):
+    """function to process additional foreground_masks
+
+    Args:
+        image_idx: specific image index to work with
+        fg_masks: foreground_masks
+    """
+
+    # sensor depth
+    fg_mask = fg_masks[image_idx]
+
+    return {"fg_mask": fg_mask}
+
+def filter_list(list_to_filter, indices):
+    """Returns a copy list with only selected indices"""
+    if list_to_filter:
+        return [list_to_filter[i] for i in indices]
+    else:
+        return []
 
 @dataclass
 class BlenderDataParserConfig(DataParserConfig):
@@ -56,6 +76,8 @@ class BlenderDataParserConfig(DataParserConfig):
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
+    include_foreground_mask: bool = False
+    """whether or not to load foreground mask"""
 
 @dataclass
 class Blender(DataParser):
@@ -78,8 +100,10 @@ class Blender(DataParser):
             alpha_color_tensor = None
 
         meta = load_from_json(self.data / f"transforms_{split}.json")
+        indices = list(range(len(meta["frames"])))
         image_filenames = []
         poses = []
+        foreground_mask_images = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -132,6 +156,12 @@ class Blender(DataParser):
                         p2=float(frame["p2"]) if "p2" in frame else 0.0,
                     )
                 )
+            if self.config.include_foreground_mask:
+                # load foreground mask
+                foreground_mask = np.array(Image.open(self.config.data / frame["masks"]), dtype="uint8")
+                foreground_mask = foreground_mask[..., :1]
+                foreground_mask_images.append(torch.from_numpy(foreground_mask).float() / 255.0)
+
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
@@ -210,11 +240,19 @@ class Blender(DataParser):
             camera_type=camera_type,
         )
 
+        additional_inputs_dict = {}
+        if self.config.include_foreground_mask:
+            additional_inputs_dict["foreground_masks"] = {
+                "func": get_foreground_masks,
+                "kwargs": {"fg_masks": filter_list(foreground_mask_images, indices)},
+            }
+
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
             alpha_color=alpha_color_tensor,
             scene_box=scene_box,
+            additional_inputs=additional_inputs_dict,
             # dataparser_scale=self.scale_factor,
         )
 
