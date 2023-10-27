@@ -417,6 +417,7 @@ class SurfaceModel(Model):
             if self.config.s3im_loss_mult > 0:
                 loss_dict["s3im_loss"] = self.s3im_loss(gt_rgb, pred_rgb) * self.config.s3im_loss_mult
             # foreground mask loss
+            print(batch)
             if "mask_filenames" in batch and self.config.fg_mask_loss_mult > 0.0:
                 fg_label = batch["fg_mask"].float().to(self.device)
                 print(fg_label)
