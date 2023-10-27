@@ -36,26 +36,6 @@ from nerfstudio.cameras import camera_utils
 from nerfstudio.utils.rich_utils import CONSOLE
 
 
-def get_foreground_masks(image_idx: int, fg_masks):
-    """function to process additional foreground_masks
-
-    Args:
-        image_idx: specific image index to work with
-        fg_masks: foreground_masks
-    """
-
-    # sensor depth
-    fg_mask = fg_masks[image_idx]
-
-    return {"fg_mask": fg_mask}
-
-def filter_list(list_to_filter, indices):
-    """Returns a copy list with only selected indices"""
-    if list_to_filter:
-        return [list_to_filter[i] for i in indices]
-    else:
-        return []
-
 @dataclass
 class BlenderDataParserConfig(DataParserConfig):
     """Blender dataset parser config"""
@@ -101,10 +81,9 @@ class Blender(DataParser):
 
         meta = load_from_json(self.data / f"transforms_{split}.json")
         indices = list(range(len(meta["frames"])))
-        print(indices)
         image_filenames = []
         poses = []
-        foreground_mask_images = []
+        mask_filenames = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -157,16 +136,23 @@ class Blender(DataParser):
                         p2=float(frame["p2"]) if "p2" in frame else 0.0,
                     )
                 )
-            if self.config.include_foreground_mask:
-                # load foreground mask
-                foreground_mask = np.array(Image.open(self.data / frame["mask_file_path"]), dtype="uint8")
-                assert "mask_file_path" in frame, "mask_file_path not specified in frame"
-                foreground_mask = foreground_mask[..., :1]
-                foreground_mask_images.append(torch.from_numpy(foreground_mask).float() / 255.0)
-            print(foreground_mask_images)
+
+
+            # if self.config.include_foreground_mask:
+            #     # load foreground mask
+            #     foreground_mask = np.array(Image.open(self.data / frame["mask_file_path"]), dtype="uint8")
+            #     assert "mask_file_path" in frame, "mask_file_path not specified in frame"
+            #     foreground_mask = foreground_mask[..., :1]
+            #     foreground_mask_images.append(torch.from_numpy(foreground_mask).float() / 255.0)
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
+
+            if "mask_file_path" in frame:
+                mask_fname = Image.open(self.data / frame["mask_file_path"])
+                mask_filenames.append(mask_fname)
+            print(mask_filenames)
+
         # poses = np.array(poses).astype(np.float32)
 
         if "orientation_override" in meta:
@@ -242,19 +228,12 @@ class Blender(DataParser):
             camera_type=camera_type,
         )
 
-        additional_inputs_dict = {}
-        if self.config.include_foreground_mask:
-            additional_inputs_dict["foreground_masks"] = {
-                "func": get_foreground_masks,
-                "kwargs": {"fg_masks": filter_list(foreground_mask_images, indices)},
-            }
-
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
             alpha_color=alpha_color_tensor,
             scene_box=scene_box,
-            additional_inputs=additional_inputs_dict,
+            mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
             # dataparser_scale=self.scale_factor,
         )
 
