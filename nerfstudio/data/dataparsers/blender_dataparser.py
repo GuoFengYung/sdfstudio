@@ -149,7 +149,7 @@ class Blender(DataParser):
             poses.append(np.array(frame["transform_matrix"]))
 
             if "mask_file_path" in frame:
-                mask_fname = Image.open(self.data / frame["mask_file_path"])
+                mask_fname = self.data / frame["mask_file_path"]
                 mask_filenames.append(mask_fname)
             print(mask_filenames)
 
