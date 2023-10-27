@@ -47,13 +47,12 @@ def get_foreground_masks(image_idx: int, fg_masks):
     # sensor depth
     fg_mask = fg_masks[image_idx]
 
-    print(fg_masks)
-
     return {"fg_mask": fg_mask}
 
 def filter_list(list_to_filter, indices):
     """Returns a copy list with only selected indices"""
     if list_to_filter:
+        print([list_to_filter[i] for i in indices])
         return [list_to_filter[i] for i in indices]
     else:
         return []
