@@ -52,6 +52,10 @@ class BlenderDataParserConfig(DataParserConfig):
     """The method to use for orientation."""
     center_poses: bool = True
     """Whether to center the poses."""
+    auto_scale_poses: bool = True
+    """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
+    scene_scale: float = 1.0
+    """How much to scale the region of interest by."""
 
 @dataclass
 class Blender(DataParser):
@@ -146,7 +150,12 @@ class Blender(DataParser):
             center_poses=self.config.center_poses,
         )
 
-        poses[:, :3, 3] *= self.scale_factor
+        # Scale poses
+        scale_factor = 1.0
+        if self.config.auto_scale_poses:
+            scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
+        scale_factor *= self.config.scale_factor
+        poses[:, :3, 3] *= self.config.scale_factor
 
         # img_0 = imageio.v2.imread(image_filenames[0])
         # image_height, image_width = img_0.shape[:2]
@@ -159,7 +168,12 @@ class Blender(DataParser):
         #
         # # in x,y,z order
         # camera_to_world[..., 3] *= self.scale_factor
-        scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.5, -1.5], [1.5, 1.5, 1.5]], dtype=torch.float32))
+        aabb_scale = self.config.scene_scale
+        scene_box = SceneBox(
+            aabb=torch.tensor(
+                [[-aabb_scale, -aabb_scale, -aabb_scale], [aabb_scale, aabb_scale, aabb_scale]], dtype=torch.float32
+            )
+        )
 
         if "camera_model" in meta:
             camera_type = CAMERA_MODEL_TO_TYPE[meta["camera_model"]]
@@ -172,7 +186,6 @@ class Blender(DataParser):
         cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)
         height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)
         width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)
-        print(fx, fy)
         if distort_fixed:
             distortion_params = camera_utils.get_distortion_params(
                 k1=float(meta["k1"]) if "k1" in meta else 0.0,

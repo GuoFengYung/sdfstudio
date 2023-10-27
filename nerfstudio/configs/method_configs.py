@@ -256,7 +256,7 @@ method_configs["bakedsdf"] = Config(
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             dataparser=SDFStudioDataParserConfig(),
-            train_num_rays_per_batch=8192,
+            train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=1024,
             camera_optimizer=CameraOptimizerConfig(
                 mode="off", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
