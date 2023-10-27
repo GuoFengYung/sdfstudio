@@ -151,7 +151,6 @@ class Blender(DataParser):
             if "mask_file_path" in frame:
                 mask_fname = self.data / frame["mask_file_path"]
                 mask_filenames.append(mask_fname)
-            print(mask_filenames)
 
         # poses = np.array(poses).astype(np.float32)
 
