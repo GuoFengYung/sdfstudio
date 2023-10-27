@@ -407,7 +407,6 @@ class SurfaceModel(Model):
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-        print(batch)
         loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
         if self.training:
             # eikonal loss

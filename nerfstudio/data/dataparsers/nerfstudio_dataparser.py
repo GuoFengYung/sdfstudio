@@ -140,10 +140,11 @@ class Nerfstudio(DataParser):
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
-            if "mask_path" in frame:
-                mask_filepath = PurePath(frame["mask_path"])
+            if "mask_file_path" in frame:
+                mask_filepath = PurePath(frame["mask_file_path"])
                 mask_fname = self._get_fname(mask_filepath, downsample_folder_prefix="masks_")
                 mask_filenames.append(mask_fname)
+
         if num_skipped_image_filenames >= 0:
             CONSOLE.log(f"Skipping {num_skipped_image_filenames} files in dataset split {split}.")
         assert (

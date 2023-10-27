@@ -37,6 +37,7 @@ from nerfstudio.model_components.losses import interlevel_loss
 from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler
 from nerfstudio.models.volsdf import VolSDFModel, VolSDFModelConfig
 from nerfstudio.utils import colormaps
+import torch.nn.functional as F
 
 
 @dataclass
@@ -263,6 +264,13 @@ class BakedSDFFactoModel(VolSDFModel):
         if self.training:
             # eikonal loss
             grad_theta = outputs["eik_grad"]
+            # foreground mask loss
+            if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
+                fg_label = batch["mask"].float().to(self.device)
+                weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
+                loss_dict["fg_mask_loss"] = (
+                    F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                )
             # s3im loss
             if self.config.s3im_loss_mult > 0:
                 loss_dict["s3im_loss"] = self.s3im_loss(image, outputs["rgb"]) * self.config.s3im_loss_mult
