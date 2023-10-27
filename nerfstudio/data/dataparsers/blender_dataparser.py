@@ -47,6 +47,8 @@ def get_foreground_masks(image_idx: int, fg_masks):
     # sensor depth
     fg_mask = fg_masks[image_idx]
 
+    print(fg_masks)
+
     return {"fg_mask": fg_mask}
 
 def filter_list(list_to_filter, indices):
