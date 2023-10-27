@@ -76,7 +76,7 @@ class BlenderDataParserConfig(DataParserConfig):
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
     scene_scale: float = 1.0
     """How much to scale the region of interest by."""
-    include_foreground_mask: bool = False
+    include_foreground_mask: bool = True
     """whether or not to load foreground mask"""
 
 @dataclass
