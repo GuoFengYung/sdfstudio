@@ -158,7 +158,7 @@ class Blender(DataParser):
                 )
             if self.config.include_foreground_mask:
                 # load foreground mask
-                print(self.data)
+                print(self.data, frame)
                 foreground_mask = np.array(Image.open(self.data / frame["mask_file_path"]), dtype="uint8")
                 print(self.data / frame["mask_file_path"])
                 assert "mask_file_path" in frame, "mask_file_path not specified in frame"
