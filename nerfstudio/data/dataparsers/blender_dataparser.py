@@ -158,7 +158,8 @@ class Blender(DataParser):
                 )
             if self.config.include_foreground_mask:
                 # load foreground mask
-                foreground_mask = np.array(Image.open(self.config.data / frame["masks"]), dtype="uint8")
+                foreground_mask = np.array(Image.open(self.config.data / frame["mask_file_path"]), dtype="uint8")
+                print(foreground_mask)
                 foreground_mask = foreground_mask[..., :1]
                 foreground_mask_images.append(torch.from_numpy(foreground_mask).float() / 255.0)
 
