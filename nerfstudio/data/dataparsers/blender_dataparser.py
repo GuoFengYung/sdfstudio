@@ -165,6 +165,7 @@ class Blender(DataParser):
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
+            print(foreground_mask_images)
         # poses = np.array(poses).astype(np.float32)
 
         if "orientation_override" in meta:
