@@ -52,7 +52,6 @@ def get_foreground_masks(image_idx: int, fg_masks):
 def filter_list(list_to_filter, indices):
     """Returns a copy list with only selected indices"""
     if list_to_filter:
-        print([list_to_filter[i] for i in indices])
         return [list_to_filter[i] for i in indices]
     else:
         return []
@@ -102,6 +101,7 @@ class Blender(DataParser):
 
         meta = load_from_json(self.data / f"transforms_{split}.json")
         indices = list(range(len(meta["frames"])))
+        print(indices)
         image_filenames = []
         poses = []
         foreground_mask_images = []
