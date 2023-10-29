@@ -213,7 +213,7 @@ class SurfaceModel(Model):
             if self.config.background_color in set(["white", "black"])
             else self.config.background_color
         )
-        self.renderer_rgb = RGBRenderer(background_color=background_color)
+        self.renderer_rgb = RGBRenderer(background_color='random')
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
         self.renderer_normal = SemanticRenderer()
