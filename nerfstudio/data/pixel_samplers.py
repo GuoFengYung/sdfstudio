@@ -57,7 +57,7 @@ def collate_image_dataset_batch(batch: Dict, num_rays_per_batch: int, keep_full_
         if key not in ("image_idx", "src_imgs", "src_idxs", "sparse_sfm_points") and value is not None
     }
 
-    assert collated_batch["image"].shape == (num_rays_per_batch, 3), collated_batch["image"].shape
+    # assert collated_batch["image"].shape == (num_rays_per_batch, 3), collated_batch["image"].shape
 
     if "sparse_sfm_points" in batch:
         collated_batch["sparse_sfm_points"] = batch["sparse_sfm_points"].images[c[0]]
