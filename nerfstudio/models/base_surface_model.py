@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Tuple, Type, cast
+from typing import Dict, List, Tuple, Type
+
 import torch
 import torch.nn.functional as F
 from torch.nn import Parameter
@@ -291,68 +292,44 @@ class SurfaceModel(Model):
         # TODO make everything outside the sphere to be 0
         return field_outputs
 
-    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
-        """Takes in a Ray Bundle and returns a dictionary of outputs.
-
-        Args:
-            ray_bundle: Input bundle of rays. This raybundle should have all the
-            needed information to compute the outputs.
-
-        Returns:
-            Outputs of model. (ie. rendered colors)
-        """
-        # assert (
-        #         ray_bundle.metadata is not None and "directions_norm" in ray_bundle.metadata
-        # ), "directions_norm is required in ray_bundle.metadata"
-
+    def get_outputs(self, ray_bundle: RayBundle) -> Dict:
         samples_and_field_outputs = self.sample_and_forward_field(ray_bundle=ray_bundle)
 
-        # shortcuts
-        field_outputs: Dict[FieldHeadNames, torch.Tensor] = cast(
-            Dict[FieldHeadNames, torch.Tensor], samples_and_field_outputs["field_outputs"]
-        )
+        # Shotscuts
+        field_outputs = samples_and_field_outputs["field_outputs"]
         ray_samples = samples_and_field_outputs["ray_samples"]
         weights = samples_and_field_outputs["weights"]
-        bg_transmittance = samples_and_field_outputs["bg_transmittance"]
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         # the rendered depth is point-to-point distance and we should convert to depth
-        depth = depth / ray_bundle.metadata["directions_norm"]
+        depth = depth / ray_bundle.directions_norm
 
-        normal = self.renderer_normal(semantics=field_outputs[FieldHeadNames.NORMALS], weights=weights)
+        # remove the rays that don't intersect with the surface
+        # hit = (field_outputs[FieldHeadNames.SDF] > 0.0).any(dim=1) & (field_outputs[FieldHeadNames.SDF] < 0).any(dim=1)
+        # depth[~hit] = 10000.0
+
+        normal = self.renderer_normal(semantics=field_outputs[FieldHeadNames.NORMAL], weights=weights)
         accumulation = self.renderer_accumulation(weights=weights)
 
+        # TODO add a flat to control how the background model are combined with foreground sdf field
         # background model
-        if self.config.background_model != "none":
-            assert isinstance(self.field_background, torch.nn.Module), "field_background should be a module"
-            assert ray_bundle.fars is not None, "fars is required in ray_bundle"
+        if self.config.background_model != "none" and "bg_transmittance" in samples_and_field_outputs:
+            bg_transmittance = samples_and_field_outputs["bg_transmittance"]
+
             # sample inversely from far to 1000 and points and forward the bg model
             ray_bundle.nears = ray_bundle.fars
-            assert ray_bundle.fars is not None
             ray_bundle.fars = torch.ones_like(ray_bundle.fars) * self.config.far_plane_bg
 
             ray_samples_bg = self.sampler_bg(ray_bundle)
             # use the same background model for both density field and occupancy field
-            assert not isinstance(self.field_background, Parameter)
             field_outputs_bg = self.field_background(ray_samples_bg)
             weights_bg = ray_samples_bg.get_weights(field_outputs_bg[FieldHeadNames.DENSITY])
 
             rgb_bg = self.renderer_rgb(rgb=field_outputs_bg[FieldHeadNames.RGB], weights=weights_bg)
-            depth_bg = self.renderer_depth(weights=weights_bg, ray_samples=ray_samples_bg)
-            accumulation_bg = self.renderer_accumulation(weights=weights_bg)
 
-            # merge background color to foregound color
+            # merge background color to forgound color
             rgb = rgb + bg_transmittance * rgb_bg
-
-            bg_outputs = {
-                "bg_rgb": rgb_bg,
-                "bg_accumulation": accumulation_bg,
-                "bg_depth": depth_bg,
-                "bg_weights": weights_bg,
-            }
-        else:
-            bg_outputs = {}
 
         outputs = {
             "rgb": rgb,
@@ -360,19 +337,27 @@ class SurfaceModel(Model):
             "depth": depth,
             "normal": normal,
             "weights": weights,
-            # used to scale z_vals for free space and sdf loss
-            "directions_norm": ray_bundle.metadata["directions_norm"],
+            "ray_points": self.scene_contraction(
+                ray_samples.frustums.get_start_positions()
+            ),  # used for creating visiblity mask
+            "directions_norm": ray_bundle.directions_norm,  # used to scale z_vals for free space and sdf loss
         }
-        outputs.update(bg_outputs)
 
         if self.training:
             grad_points = field_outputs[FieldHeadNames.GRADIENT]
-            outputs.update({"eik_grad": grad_points})
+            points_norm = field_outputs["points_norm"]
+            outputs.update({"eik_grad": grad_points, "points_norm": points_norm})
+
+            # TODO volsdf use different point set for eikonal loss
+            # grad_points = self.field.gradient(eik_points)
+            # outputs.update({"eik_grad": grad_points})
+
             outputs.update(samples_and_field_outputs)
 
+        # TODO how can we move it to neus_facto without out of memory
         if "weights_list" in samples_and_field_outputs:
-            weights_list = cast(List[torch.Tensor], samples_and_field_outputs["weights_list"])
-            ray_samples_list = cast(List[torch.Tensor], samples_and_field_outputs["ray_samples_list"])
+            weights_list = samples_and_field_outputs["weights_list"]
+            ray_samples_list = samples_and_field_outputs["ray_samples_list"]
 
             for i in range(len(weights_list) - 1):
                 outputs[f"prop_depth_{i}"] = self.renderer_depth(
@@ -382,33 +367,60 @@ class SurfaceModel(Model):
         outputs["normal_vis"] = (outputs["normal"] + 1.0) / 2.0
         return outputs
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
-        """Computes and returns the losses dict.
-
+    def get_outputs_flexible(self, ray_bundle: RayBundle, additional_inputs: Dict[str, TensorType]) -> Dict:
+        """run the model with additional inputs such as warping or rendering from unseen rays
         Args:
-            outputs: the output to compute loss dict to
-            batch: ground truth batch corresponding to outputs
-            metrics_dict: dictionary of metrics, some of which we can use for loss
+            ray_bundle: containing all the information needed to render that ray latents included
+            additional_inputs: addtional inputs such as images, src_idx, src_cameras
+
+        Returns:
+            dict: information needed for compute gradients
         """
+        if self.collider is not None:
+            ray_bundle = self.collider(ray_bundle)
+
+        outputs = self.get_outputs(ray_bundle)
+
+        ray_samples = outputs["ray_samples"]
+        field_outputs = outputs["field_outputs"]
+
+        if self.config.patch_warp_loss_mult > 0:
+            # patch warping
+            warped_patches, valid_mask = self.patch_warping(
+                ray_samples,
+                field_outputs[FieldHeadNames.SDF],
+                field_outputs[FieldHeadNames.NORMAL],
+                additional_inputs["src_cameras"],
+                additional_inputs["src_imgs"],
+                pix_indices=additional_inputs["uv"],
+            )
+
+            outputs.update({"patches": warped_patches, "patches_valid_mask": valid_mask})
+
+        return outputs
+
+    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict:
         loss_dict = {}
         image = batch["image"].to(self.device)
-        pred_image, image = self.renderer_rgb.blend_background_for_loss_computation(
+        pred_rgb, gt_rgb = self.renderer_rgb.blend_background_for_loss_computation(
             pred_image=outputs["rgb"],
             pred_accumulation=outputs["accumulation"],
             gt_image=image,
         )
-        loss_dict["rgb_loss"] = self.rgb_loss(image, pred_image)
+        loss_dict["rgb_loss"] = self.rgb_loss(gt_rgb, pred_rgb)
         if self.training:
             # eikonal loss
             grad_theta = outputs["eik_grad"]
             loss_dict["eikonal_loss"] = ((grad_theta.norm(2, dim=-1) - 1) ** 2).mean() * self.config.eikonal_loss_mult
-
+            # s3im loss
+            if self.config.s3im_loss_mult > 0:
+                loss_dict["s3im_loss"] = self.s3im_loss(gt_rgb, pred_rgb) * self.config.s3im_loss_mult
             # foreground mask loss
-            if "fg_mask" in batch and self.config.fg_mask_loss_mult > 0.0:
-                fg_label = batch["fg_mask"].float().to(self.device)
+            if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
+                fg_label = batch["mask"].float().to(self.device)
                 weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
                 loss_dict["fg_mask_loss"] = (
-                        F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                    F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
                 )
 
             # monocular normal loss
@@ -416,68 +428,92 @@ class SurfaceModel(Model):
                 normal_gt = batch["normal"].to(self.device)
                 normal_pred = outputs["normal"]
                 loss_dict["normal_loss"] = (
-                        monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
+                    monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
                 )
 
             # monocular depth loss
             if "depth" in batch and self.config.mono_depth_loss_mult > 0.0:
+                # TODO check it's true that's we sample from only a single image
+                # TODO only supervised pixel that hit the surface and remove hard-coded scaling for depth
                 depth_gt = batch["depth"].to(self.device)[..., None]
                 depth_pred = outputs["depth"]
 
                 mask = torch.ones_like(depth_gt).reshape(1, 32, -1).bool()
                 loss_dict["depth_loss"] = (
-                        self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
-                        * self.config.mono_depth_loss_mult
+                    self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
+                    * self.config.mono_depth_loss_mult
                 )
+
+            # sensor depth loss
+            if "sensor_depth" in batch and (
+                self.config.sensor_depth_l1_loss_mult > 0.0
+                or self.config.sensor_depth_freespace_loss_mult > 0.0
+                or self.config.sensor_depth_sdf_loss_mult > 0.0
+            ):
+                l1_loss, free_space_loss, sdf_loss = self.sensor_depth_loss(batch, outputs)
+
+                loss_dict["sensor_l1_loss"] = l1_loss * self.config.sensor_depth_l1_loss_mult
+                loss_dict["sensor_freespace_loss"] = free_space_loss * self.config.sensor_depth_freespace_loss_mult
+                loss_dict["sensor_sdf_loss"] = sdf_loss * self.config.sensor_depth_sdf_loss_mult
+
+            # multi-view photoconsistency loss as Geo-NeuS
+            if "patches" in outputs and self.config.patch_warp_loss_mult > 0.0:
+                patches = outputs["patches"]
+                patches_valid_mask = outputs["patches_valid_mask"]
+
+                loss_dict["patch_loss"] = (
+                    self.patch_loss(patches, patches_valid_mask) * self.config.patch_warp_loss_mult
+                )
+
+            # sparse points sdf loss
+            if "sparse_sfm_points" in batch and self.config.sparse_points_sdf_loss_mult > 0.0:
+                sparse_sfm_points = batch["sparse_sfm_points"].to(self.device)
+                sparse_sfm_points_sdf = self.field.forward_geonetwork(sparse_sfm_points)[:, 0].contiguous()
+                loss_dict["sparse_sfm_points_sdf_loss"] = (
+                    torch.mean(torch.abs(sparse_sfm_points_sdf)) * self.config.sparse_points_sdf_loss_mult
+                )
+
+            # total variational loss for multi-resolution periodic feature volume
+            if self.config.periodic_tvl_mult > 0.0:
+                assert self.field.config.encoding_type == "periodic"
+                loss_dict["tvl_loss"] = self.field.encoding.get_total_variation_loss() * self.config.periodic_tvl_mult
 
         return loss_dict
 
-    def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
-        """Compute and returns metrics.
-
-        Args:
-            outputs: the output to compute loss dict to
-            batch: ground truth batch corresponding to outputs
-        """
+    def get_metrics_dict(self, outputs, batch) -> Dict:
         metrics_dict = {}
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
+        gt_rgb = batch["image"].to(self.device)
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)  # Blend if RGBA
+        metrics_dict["psnr"] = self.psnr(outputs["rgb"], gt_rgb)
         return metrics_dict
 
     def get_image_metrics_and_images(
-            self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
+        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        """Writes the test image outputs.
-        Args:
-            outputs: Outputs of the model.
-            batch: Batch of data.
-
-        Returns:
-            A dictionary of metrics.
-        """
-        image = batch["image"].to(self.device)
-        image = self.renderer_rgb.blend_background(image)
-        rgb = outputs["rgb"]
+        gt_rgb = batch["image"].to(self.device)
+        predicted_rgb = outputs["rgb"]  # Blended with background (black if random background)
+        gt_rgb = self.renderer_rgb.blend_background(gt_rgb)
         acc = colormaps.apply_colormap(outputs["accumulation"])
 
         normal = outputs["normal"]
+        # don't need to normalize here
+        # normal = torch.nn.functional.normalize(normal, p=2, dim=-1)
         normal = (normal + 1.0) / 2.0
 
-        combined_rgb = torch.cat([image, rgb], dim=1)
+        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
         if "depth" in batch:
             depth_gt = batch["depth"].to(self.device)
             depth_pred = outputs["depth"]
 
             # align to predicted depth and normalize
-            # scale, shift = normalized_depth_scale_and_shift(
-            #     depth_pred[None, ..., 0], depth_gt[None, ...], depth_gt[None, ...] > 0.0
-            # )
-            # depth_pred = depth_pred * scale + shift
-            #
-            # combined_depth = torch.cat([depth_gt[..., None], depth_pred], dim=1)
-            # combined_depth = colormaps.apply_depth_colormap(combined_depth)
+            scale, shift = compute_scale_and_shift(
+                depth_pred[None, ..., 0], depth_gt[None, ...], depth_gt[None, ...] > 0.0
+            )
+            depth_pred = depth_pred * scale + shift
+
+            combined_depth = torch.cat([depth_gt[..., None], depth_pred], dim=1)
+            combined_depth = colormaps.apply_depth_colormap(combined_depth)
         else:
             depth = colormaps.apply_depth_colormap(
                 outputs["depth"],
@@ -498,13 +534,21 @@ class SurfaceModel(Model):
             "normal": combined_normal,
         }
 
-        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-        image = torch.moveaxis(image, -1, 0)[None, ...]
-        rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
+        if "sensor_depth" in batch:
+            sensor_depth = batch["sensor_depth"]
+            depth_pred = outputs["depth"]
 
-        psnr = self.psnr(image, rgb)
-        ssim = self.ssim(image, rgb)
-        lpips = self.lpips(image, rgb)
+            combined_sensor_depth = torch.cat([sensor_depth[..., None], depth_pred], dim=1)
+            combined_sensor_depth = colormaps.apply_depth_colormap(combined_sensor_depth)
+            images_dict["sensor_depth"] = combined_sensor_depth
+
+        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
+        gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
+        predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
+
+        psnr = self.psnr(gt_rgb, predicted_rgb)
+        ssim = self.ssim(gt_rgb, predicted_rgb)
+        lpips = self.lpips(gt_rgb, predicted_rgb)
 
         # all of these metrics will be logged as scalars
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
