@@ -208,12 +208,12 @@ class SurfaceModel(Model):
         self.sampler_bg = LinearDisparitySampler(num_samples=self.config.num_samples_outside)
 
         # renderers
-        background_color = (
-            get_color(self.config.background_color)
-            if self.config.background_color in set(["white", "black"])
-            else self.config.background_color
-        )
-        self.renderer_rgb = RGBRenderer(background_color=background_color)
+        #background_color = (
+        #    get_color(self.config.background_color)
+        #    if self.config.background_color in set(["white", "black"])
+        #    else self.config.background_color
+        #)
+        self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
         self.renderer_normal = SemanticRenderer()
