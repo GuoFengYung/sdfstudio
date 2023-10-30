@@ -1,4 +1,4 @@
-# Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+# Copyright 2022 The Nerfstudio Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,27 +21,32 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Tuple, Type, cast
-
 import torch
 import torch.nn.functional as F
 from torch.nn import Parameter
-from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image import PeakSignalNoiseRatio
+from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-
-from nerfstudio.cameras.rays import RayBundle
+from torchtyping import TensorType
+from typing_extensions import Literal
+from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.field_components.encodings import NeRFEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
-from nerfstudio.fields.nerfacto_field import NerfactoField
+from nerfstudio.fields.nerfacto_field import TCNNNerfactoField
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.fields.vanilla_nerf_field import NeRFField
 from nerfstudio.model_components.losses import (
     L1Loss,
     MSELoss,
+    MultiViewLoss,
     ScaleAndShiftInvariantLoss,
+    SensorDepthLoss,
+    compute_scale_and_shift,
     monosdf_normal_loss,
+    S3IM,
 )
+from nerfstudio.model_components.patch_warping import PatchWarping
 from nerfstudio.model_components.ray_samplers import LinearDisparitySampler
 from nerfstudio.model_components.renderers import (
     AccumulationRenderer,
@@ -49,16 +54,19 @@ from nerfstudio.model_components.renderers import (
     RGBRenderer,
     SemanticRenderer,
 )
-from nerfstudio.model_components.scene_colliders import AABBBoxCollider, NearFarCollider
+from nerfstudio.model_components.scene_colliders import (
+    AABBBoxCollider,
+    NearFarCollider,
+    SphereCollider,
+)
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.colors import get_color
-from nerfstudio.utils.math import normalized_depth_scale_and_shift
 
 
 @dataclass
 class SurfaceModelConfig(ModelConfig):
-    """Surface Model Config"""
+    """Nerfacto Model Config"""
 
     _target: Type = field(default_factory=lambda: SurfaceModel)
     near_plane: float = 0.05
@@ -72,23 +80,55 @@ class SurfaceModelConfig(ModelConfig):
     use_average_appearance_embedding: bool = False
     """Whether to use average appearance embedding or zeros for inference."""
     eikonal_loss_mult: float = 0.1
-    """Monocular normal consistency loss multiplier."""
+    """Eikonal loss multiplier."""
     fg_mask_loss_mult: float = 0.01
     """Foreground mask loss multiplier."""
     mono_normal_loss_mult: float = 0.0
     """Monocular normal consistency loss multiplier."""
     mono_depth_loss_mult: float = 0.0
     """Monocular depth consistency loss multiplier."""
+    patch_warp_loss_mult: float = 0.0
+    """Multi-view consistency warping loss multiplier."""
+    patch_size: int = 11
+    """Multi-view consistency warping loss patch size."""
+    patch_warp_angle_thres: float = 0.3
+    """Threshold for valid homograph of multi-view consistency warping loss"""
+    min_patch_variance: float = 0.01
+    """Threshold for minimal patch variance"""
+    topk: int = 4
+    """Number of minimal patch consistency selected for training"""
+    sensor_depth_truncation: float = 0.015
+    """Sensor depth trunction, default value is 0.015 which means 5cm with a rough scale value 0.3 (0.015 = 0.05 * 0.3)"""
+    sensor_depth_l1_loss_mult: float = 0.0
+    """Sensor depth L1 loss multiplier."""
+    sensor_depth_freespace_loss_mult: float = 0.0
+    """Sensor depth free space loss multiplier."""
+    sensor_depth_sdf_loss_mult: float = 0.0
+    """Sensor depth sdf loss multiplier."""
+    sparse_points_sdf_loss_mult: float = 0.0
+    """sparse point sdf loss multiplier"""
+    s3im_loss_mult: float = 0.0
+    """S3IM loss multiplier."""
+    s3im_kernel_size: int = 4
+    """S3IM kernel size."""
+    s3im_stride: int = 4
+    """S3IM stride."""
+    s3im_repeat_time: int = 10
+    """S3IM repeat time."""
+    s3im_patch_height: int = 32
+    """S3IM virtual patch height."""
     sdf_field: SDFFieldConfig = SDFFieldConfig()
     """Config for SDF Field"""
     background_model: Literal["grid", "mlp", "none"] = "mlp"
     """background models"""
     num_samples_outside: int = 32
-    """Number of samples outside the bounding sphere for background"""
+    """Number of samples outside the bounding sphere for backgound"""
     periodic_tvl_mult: float = 0.0
-    """Total variational loss multiplier"""
+    """Total variational loss mutliplier"""
     overwrite_near_far_plane: bool = False
     """whether to use near and far collider from command line"""
+    scene_contraction_norm: Literal["inf", "l2"] = "inf"
+    """Which norm to use for the scene contraction."""
 
 
 class SurfaceModel(Model):
@@ -104,19 +144,34 @@ class SurfaceModel(Model):
         """Set the fields and modules."""
         super().populate_modules()
 
-        self.scene_contraction = SceneContraction(order=float("inf"))
+        if self.config.scene_contraction_norm == "inf":
+            order = float("inf")
+        elif self.config.scene_contraction_norm == "l2":
+            order = None
+        else:
+            raise ValueError("Invalid scene contraction norm")
 
+        self.scene_contraction = SceneContraction(order=order)
         # Can we also use contraction for sdf?
         # Fields
         self.field = self.config.sdf_field.setup(
             aabb=self.scene_box.aabb,
-            spatial_distortion=self.scene_contraction,
+            # spatial_distortion=self.scene_contraction,
+            spatial_distortion=None,
             num_images=self.num_train_data,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
         )
 
         # Collider
-        self.collider = AABBBoxCollider(self.scene_box, near_plane=0.05)
+        if self.scene_box.collider_type == "near_far":
+            self.collider = NearFarCollider(near_plane=self.scene_box.near, far_plane=self.scene_box.far)
+        elif self.scene_box.collider_type == "box":
+            self.collider = AABBBoxCollider(self.scene_box, near_plane=self.scene_box.near)
+        elif self.scene_box.collider_type == "sphere":
+            # TODO do we also use near if the ray don't intersect with the sphere
+            self.collider = SphereCollider(radius=self.scene_box.radius, soft_intersection=True)
+        else:
+            raise NotImplementedError
 
         # command line near and far has highest priority
         if self.config.overwrite_near_far_plane:
@@ -124,9 +179,10 @@ class SurfaceModel(Model):
 
         # background model
         if self.config.background_model == "grid":
-            self.field_background = NerfactoField(
+            self.field_background = TCNNNerfactoField(
                 self.scene_box.aabb,
-                spatial_distortion=self.scene_contraction,
+                # spatial_distortion=self.scene_contraction,
+                spatial_distortion=None,
                 num_images=self.num_train_data,
                 use_average_appearance_embedding=self.config.use_average_appearance_embedding,
             )
@@ -141,7 +197,8 @@ class SurfaceModel(Model):
             self.field_background = NeRFField(
                 position_encoding=position_encoding,
                 direction_encoding=direction_encoding,
-                spatial_distortion=self.scene_contraction,
+                # spatial_distortion=self.scene_contraction,
+                spatial_distortion=None,
             )
         else:
             # dummy background model
@@ -150,20 +207,30 @@ class SurfaceModel(Model):
         self.sampler_bg = LinearDisparitySampler(num_samples=self.config.num_samples_outside)
 
         # renderers
-        background_color = (
-            get_color(self.config.background_color)
-            if self.config.background_color in set(["white", "black"])
-            else self.config.background_color
-        )
-        self.renderer_rgb = RGBRenderer(background_color=background_color)
+        #background_color = (
+        #    get_color(self.config.background_color)
+        #    if self.config.background_color in set(["white", "black"])
+        #    else self.config.background_color
+        #)
+        self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method="expected")
         self.renderer_normal = SemanticRenderer()
+        # patch warping
+        self.patch_warping = PatchWarping(
+            patch_size=self.config.patch_size, valid_angle_thres=self.config.patch_warp_angle_thres
+        )
 
         # losses
         self.rgb_loss = L1Loss()
+        self.s3im_loss = S3IM(s3im_kernel_size=self.config.s3im_kernel_size, s3im_stride=self.config.s3im_stride, s3im_repeat_time=self.config.s3im_repeat_time, s3im_patch_height=self.config.s3im_patch_height)
+
         self.eikonal_loss = MSELoss()
         self.depth_loss = ScaleAndShiftInvariantLoss(alpha=0.5, scales=1)
+        self.patch_loss = MultiViewLoss(
+            patch_size=self.config.patch_size, topk=self.config.topk, min_patch_variance=self.config.min_patch_variance
+        )
+        self.sensor_depth_loss = SensorDepthLoss(truncation=self.config.sensor_depth_truncation)
 
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
@@ -173,24 +240,56 @@ class SurfaceModel(Model):
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
         param_groups["fields"] = list(self.field.parameters())
-        param_groups["field_background"] = (
-            [self.field_background]
-            if isinstance(self.field_background, Parameter)
-            else list(self.field_background.parameters())
-        )
+        if self.config.background_model != "none":
+            param_groups["field_background"] = list(self.field_background.parameters())
+        else:
+            param_groups["field_background"] = list(self.field_background)
         return param_groups
 
     @abstractmethod
-    def sample_and_forward_field(self, ray_bundle: RayBundle) -> Dict[str, Any]:
-        """Takes in a Ray Bundle and returns a dictionary of samples and field output.
+    def sample_and_forward_field(self, ray_bundle: RayBundle) -> Dict:
+        """_summary_
 
         Args:
-            ray_bundle: Input bundle of rays. This raybundle should have all the
-            needed information to compute the outputs.
-
-        Returns:
-            Outputs of model. (ie. rendered colors)
+            ray_bundle (RayBundle): _description_
+            return_samples (bool, optional): _description_. Defaults to False.
         """
+
+    def get_foreground_mask(self, ray_samples: RaySamples) -> TensorType:
+        """_summary_
+
+        Args:
+            ray_samples (RaySamples): _description_
+        """
+        # TODO support multiple foreground type: box and sphere
+        inside_sphere_mask = (ray_samples.frustums.get_start_positions().norm(dim=-1, keepdim=True) < 1.0).float()
+        return inside_sphere_mask
+
+    def forward_background_field_and_merge(self, ray_samples: RaySamples, field_outputs: Dict) -> Dict:
+        """_summary_
+
+        Args:
+            ray_samples (RaySamples): _description_
+            field_outputs (Dict): _description_
+        """
+
+        inside_sphere_mask = self.get_foreground_mask(ray_samples)
+        # TODO only forward the points that are outside the sphere if there is a background model
+
+        field_outputs_bg = self.field_background(ray_samples)
+        field_outputs_bg[FieldHeadNames.ALPHA] = ray_samples.get_alphas(field_outputs_bg[FieldHeadNames.DENSITY])
+
+        field_outputs[FieldHeadNames.ALPHA] = (
+            field_outputs[FieldHeadNames.ALPHA] * inside_sphere_mask
+            + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.ALPHA]
+        )
+        field_outputs[FieldHeadNames.RGB] = (
+            field_outputs[FieldHeadNames.RGB] * inside_sphere_mask
+            + (1.0 - inside_sphere_mask) * field_outputs_bg[FieldHeadNames.RGB]
+        )
+
+        # TODO make everything outside the sphere to be 0
+        return field_outputs
 
     def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
@@ -203,7 +302,7 @@ class SurfaceModel(Model):
             Outputs of model. (ie. rendered colors)
         """
         assert (
-            ray_bundle.metadata is not None and "directions_norm" in ray_bundle.metadata
+                ray_bundle.metadata is not None and "directions_norm" in ray_bundle.metadata
         ), "directions_norm is required in ray_bundle.metadata"
 
         samples_and_field_outputs = self.sample_and_forward_field(ray_bundle=ray_bundle)
@@ -309,7 +408,7 @@ class SurfaceModel(Model):
                 fg_label = batch["fg_mask"].float().to(self.device)
                 weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
                 loss_dict["fg_mask_loss"] = (
-                    F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                        F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
                 )
 
             # monocular normal loss
@@ -317,7 +416,7 @@ class SurfaceModel(Model):
                 normal_gt = batch["normal"].to(self.device)
                 normal_pred = outputs["normal"]
                 loss_dict["normal_loss"] = (
-                    monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
+                        monosdf_normal_loss(normal_pred, normal_gt) * self.config.mono_normal_loss_mult
                 )
 
             # monocular depth loss
@@ -327,8 +426,8 @@ class SurfaceModel(Model):
 
                 mask = torch.ones_like(depth_gt).reshape(1, 32, -1).bool()
                 loss_dict["depth_loss"] = (
-                    self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
-                    * self.config.mono_depth_loss_mult
+                        self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
+                        * self.config.mono_depth_loss_mult
                 )
 
         return loss_dict
@@ -347,7 +446,7 @@ class SurfaceModel(Model):
         return metrics_dict
 
     def get_image_metrics_and_images(
-        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
+            self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         """Writes the test image outputs.
         Args:
@@ -372,13 +471,13 @@ class SurfaceModel(Model):
             depth_pred = outputs["depth"]
 
             # align to predicted depth and normalize
-            scale, shift = normalized_depth_scale_and_shift(
-                depth_pred[None, ..., 0], depth_gt[None, ...], depth_gt[None, ...] > 0.0
-            )
-            depth_pred = depth_pred * scale + shift
-
-            combined_depth = torch.cat([depth_gt[..., None], depth_pred], dim=1)
-            combined_depth = colormaps.apply_depth_colormap(combined_depth)
+            # scale, shift = normalized_depth_scale_and_shift(
+            #     depth_pred[None, ..., 0], depth_gt[None, ...], depth_gt[None, ...] > 0.0
+            # )
+            # depth_pred = depth_pred * scale + shift
+            #
+            # combined_depth = torch.cat([depth_gt[..., None], depth_pred], dim=1)
+            # combined_depth = colormaps.apply_depth_colormap(combined_depth)
         else:
             depth = colormaps.apply_depth_colormap(
                 outputs["depth"],
