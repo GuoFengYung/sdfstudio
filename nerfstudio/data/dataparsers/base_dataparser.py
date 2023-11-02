@@ -63,6 +63,8 @@ class DataparserOutputs:
     """Monocular depth."""
     normals: Optional[torch.Tensor] = None
     """Monocular normal."""
+    dataparser_scale: float = 1.0
+    """Scale applied by the dataparser."""
     additional_inputs: Dict[str, Any] = to_immutable_dict({})
     """Dictionary of additional dataset information (e.g. semantics/point clouds/masks).
     {input_name:

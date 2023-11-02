@@ -244,7 +244,7 @@ class Blender(DataParser):
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
             },
-            # dataparser_scale=self.scale_factor,
+            dataparser_scale=self.scale_factor,
         )
 
         return dataparser_outputs
