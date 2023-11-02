@@ -58,6 +58,8 @@ class BlenderDataParserConfig(DataParserConfig):
     """How much to scale the region of interest by."""
     include_foreground_mask: bool = True
     """whether or not to load foreground mask"""
+    depth_unit_scale_factor: float = 1e-3
+    """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
 
 @dataclass
 class Blender(DataParser):
@@ -239,7 +241,8 @@ class Blender(DataParser):
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
             metadata={
-                "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None
+                "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
+                "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
             },
             # dataparser_scale=self.scale_factor,
         )
