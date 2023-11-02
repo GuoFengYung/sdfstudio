@@ -258,7 +258,6 @@ class BakedSDFFactoModel(VolSDFModel):
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = {}
-        print(batch)
         image = batch["image"].to(self.device)
         pred_rgb, gt_rgb = self.renderer_rgb.blend_background_for_loss_computation(
             pred_image=outputs["rgb"],
@@ -280,8 +279,8 @@ class BakedSDFFactoModel(VolSDFModel):
             if "depth_image" in batch and self.config.mono_depth_loss_mult > 0.0:
                 # TODO check it's true that's we sample from only a single image
                 # TODO only supervised pixel that hit the surface and remove hard-coded scaling for depth
-                depth_gt = batch["depth"].to(self.device)[..., None]
-                depth_pred = outputs["depth"]
+                depth_gt = batch["depth_image"].to(self.device)[..., None]
+                depth_pred = outputs["depth_image"]
 
                 mask = torch.ones_like(depth_gt).reshape(1, 32, -1).bool()
                 loss_dict["depth_loss"] = (
