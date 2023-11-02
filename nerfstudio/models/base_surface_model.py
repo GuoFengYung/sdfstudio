@@ -86,7 +86,7 @@ class SurfaceModelConfig(ModelConfig):
     """Foreground mask loss multiplier."""
     mono_normal_loss_mult: float = 0.0
     """Monocular normal consistency loss multiplier."""
-    mono_depth_loss_mult: float = 0.0
+    mono_depth_loss_mult: float = 0.01
     """Monocular depth consistency loss multiplier."""
     patch_warp_loss_mult: float = 0.0
     """Multi-view consistency warping loss multiplier."""
