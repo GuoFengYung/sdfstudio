@@ -34,6 +34,7 @@ from nerfstudio.data.datamanagers.base_datamanager import (
     VanillaDataManagerConfig,
 )
 from nerfstudio.data.datamanagers.semantic_datamanager import SemanticDataManagerConfig
+from nerfstudio.data.datamanagers.depth_datamanager import DepthDataManagerConfig
 from nerfstudio.data.datamanagers.variable_res_datamanager import (
     VariableResDataManagerConfig,
 )
@@ -254,8 +255,8 @@ method_configs["bakedsdf"] = Config(
         mixed_precision=False,
     ),
     pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(
-            dataparser=SDFStudioDataParserConfig(),
+        datamanager=DepthDataManagerConfig(
+            dataparser=BlenderDataParserConfig(),
             train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=1024,
             camera_optimizer=CameraOptimizerConfig(

@@ -84,6 +84,7 @@ class Blender(DataParser):
         image_filenames = []
         poses = []
         mask_filenames = []
+        depth_filenames = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -151,6 +152,10 @@ class Blender(DataParser):
             if "mask_file_path" in frame:
                 mask_fname = self.data / frame["mask_file_path"]
                 mask_filenames.append(mask_fname)
+
+            if "depth_file_path" in frame:
+                depth_name = self.data / frame["depth_file_path"]
+                depth_filenames.append(depth_name)
 
         # poses = np.array(poses).astype(np.float32)
 
@@ -233,6 +238,9 @@ class Blender(DataParser):
             # alpha_color=alpha_color_tensor,
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
+            metadata={
+                "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None
+            },
             # dataparser_scale=self.scale_factor,
         )
 
