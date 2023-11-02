@@ -277,7 +277,7 @@ class BakedSDFFactoModel(VolSDFModel):
                 loss_dict["fg_mask_loss"] = (
                     F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
                 )
-            if "depth" in batch and self.config.mono_depth_loss_mult > 0.0:
+            if "depth_image" in batch and self.config.mono_depth_loss_mult > 0.0:
                 # TODO check it's true that's we sample from only a single image
                 # TODO only supervised pixel that hit the surface and remove hard-coded scaling for depth
                 depth_gt = batch["depth"].to(self.device)[..., None]
