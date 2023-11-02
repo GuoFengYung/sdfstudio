@@ -237,7 +237,7 @@ class Blender(DataParser):
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
-            # alpha_color=alpha_color_tensor,
+            alpha_color=alpha_color_tensor,
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
             metadata={

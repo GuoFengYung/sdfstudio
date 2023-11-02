@@ -272,6 +272,7 @@ class BakedSDFFactoModel(VolSDFModel):
             # foreground mask loss
             if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
                 fg_label = batch["mask"].float().to(self.device)
+                fg_label = self.renderer_rgb.blend_background(fg_label)
                 weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
                 loss_dict["fg_mask_loss"] = (
                     F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
