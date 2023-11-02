@@ -19,6 +19,8 @@ Miscellaneous helper code.
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
+import warnings
+import platform
 
 
 def get_dict_to_torch(stuff: Any, device: Union[torch.device, str] = "cpu", exclude: Optional[List[str]] = None):
@@ -147,3 +149,30 @@ def update_avg(prev_avg: float, new_val: float, step: int) -> float:
         float: new updated average
     """
     return (step * prev_avg + new_val) / (step + 1)
+
+def torch_compile(*args, **kwargs) -> Any:
+    """
+    Safe torch.compile with backward compatibility for PyTorch 1.x
+    """
+    if not hasattr(torch, "compile"):
+        # Backward compatibility for PyTorch 1.x
+        warnings.warn(
+            "PyTorch 1.x will no longer be supported by Nerstudio. Please upgrade to PyTorch 2.x.", DeprecationWarning
+        )
+        if args and isinstance(args[0], torch.nn.Module):
+            return args[0]
+        else:
+            return torch.jit.script
+    elif platform.system() == "Windows":
+        # torch.compile is not supported on Windows
+        # https://github.com/orgs/pytorch/projects/27
+        # TODO: @jkulhanek, remove this once torch.compile is supported on Windows
+        warnings.warn(
+            "Windows does not yet support torch.compile and the performance will be affected.", RuntimeWarning
+        )
+        if args and isinstance(args[0], torch.nn.Module):
+            return args[0]
+        else:
+            return lambda x: x
+    else:
+        return torch.compile(*args, **kwargs)
