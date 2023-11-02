@@ -280,7 +280,7 @@ class BakedSDFFactoModel(VolSDFModel):
                 # TODO check it's true that's we sample from only a single image
                 # TODO only supervised pixel that hit the surface and remove hard-coded scaling for depth
                 depth_gt = batch["depth_image"].to(self.device)[..., None]
-                depth_pred = outputs["depth_image"]
+                depth_pred = outputs["depth"]
 
                 mask = torch.ones_like(depth_gt).reshape(1, 32, -1).bool()
                 loss_dict["depth_loss"] = (
