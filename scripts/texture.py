@@ -41,6 +41,12 @@ class TextureMesh:
     """If using xatlas for unwrapping, the pixels per side of the texture image."""
     target_num_faces: Optional[int] = 50000
     """Target number of faces for the mesh to texture."""
+    sh_levels: Optional[int] = 5
+    """Levels of spherical harmonics Bases."""
+    dir_sample_method: Literal["sphere", "cubemap"] = "cubemap"
+    """The method to use for sampling directions."""
+    num_sh_samples: Optional[int] = 15
+    """Number of directional samples for spherical harmonics coefficients reconstruction."""
 
     def main(self) -> None:
         """Export textured mesh"""
@@ -64,6 +70,9 @@ class TextureMesh:
             output_dir=self.output_dir,
             unwrap_method=self.unwrap_method,
             num_pixels_per_side=self.num_pixels_per_side,
+            sh_levels=self.sh_levels,
+            dir_sample_method=self.dir_sample_method,
+            num_sh_samples=self.num_sh_samples,
         )
 
 

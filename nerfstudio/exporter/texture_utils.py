@@ -31,14 +31,105 @@ import xatlas
 from rich.console import Console
 from torchtyping import TensorType
 from typing_extensions import Literal
-
+from nerfstudio.utils.math import components_from_spherical_harmonics
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.exporter.exporter_utils import Mesh
 from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils.rich_utils import get_progress
-
+import os
+import imageio
 CONSOLE = Console(width=120)
 
+
+def gen_cubemap_texture_sh(sh_bases, map_res=8):
+    """Generate cubemap texture samples as cube map pixels
+
+    Args:
+        xyz : point to generate cubemap texture.
+        map_res: cubemap side resolution
+    """
+
+    # generate UV coordinates (u, v, weight)
+
+
+def sampling_cubemap(map_res=8):
+    """Generate samples as cube map pixels
+
+    Args:
+        map_res: cubemap side resolution
+    """
+
+    # generate UV coordinates (u, v, weight)
+    uvw = torch.zeros((map_res, map_res, 3))
+    for u in range(map_res):
+        for v in range(map_res):
+            # compute uv coordinate
+            uv_texel_coord = torch.tensor(((u + 0.5) / map_res, (v + 0.5) / map_res))
+            uv_texel_coord = uv_texel_coord * 2.0 - 1.0
+            uvw[u, v, :2] = uv_texel_coord
+            # compute weight
+            texel_weight = 1.0 + uv_texel_coord[0] * uv_texel_coord[0] + uv_texel_coord[1] * uv_texel_coord[1]
+            texel_weight = 4.0 / (torch.sqrt(texel_weight) * texel_weight)
+            uvw[u, v, 2] = texel_weight
+
+    # generate samples on cubemap (6 faces : -x, +x, -y, +y, -z, +z)
+    xyzw = torch.zeros((6, map_res, map_res, 4))
+    # -x
+    xyzw[0, ..., 0] = -1.0
+    xyzw[0, ..., 1] = uvw[..., 0]
+    xyzw[0, ..., 2] = uvw[..., 1]
+    xyzw[0, ..., 3] = uvw[..., 2]
+    # +x
+    xyzw[1, ..., 0] = 1.0
+    xyzw[1, ..., 1] = uvw[..., 0]
+    xyzw[1, ..., 2] = uvw[..., 1]
+    xyzw[1, ..., 3] = uvw[..., 2]
+    # -y
+    xyzw[2, ..., 0] = uvw[..., 0]
+    xyzw[2, ..., 1] = -1.0
+    xyzw[2, ..., 2] = uvw[..., 1]
+    xyzw[2, ..., 3] = uvw[..., 2]
+    # +y
+    xyzw[3, ..., 0] = uvw[..., 0]
+    xyzw[3, ..., 1] = 1.0
+    xyzw[3, ..., 2] = uvw[..., 1]
+    xyzw[3, ..., 3] = uvw[..., 2]
+    # -z
+    xyzw[4, ..., 0] = uvw[..., 0]
+    xyzw[4, ..., 1] = uvw[..., 1]
+    xyzw[4, ..., 2] = -1.0
+    xyzw[4, ..., 3] = uvw[..., 2]
+    # +z
+    xyzw[5, ..., 0] = uvw[..., 0]
+    xyzw[5, ..., 1] = uvw[..., 1]
+    xyzw[5, ..., 2] = 1.0
+    xyzw[5, ..., 3] = uvw[..., 2]
+
+    # reshape [6, map_res, map_res, 4] to [6*map_res*map_res, 4]
+    xyzw = torch.reshape(xyzw, (6 * map_res * map_res, 4))
+    return xyzw
+
+def sampling_uniform_sphere(num_samples=32):
+    """Generate uniform samples on unit sphere.
+
+    Args:
+        num_samples: Number of samples
+    Return:
+        list of samples (x, y, z, w(sample weight))
+    """
+
+    # generate uniform samples in spherical coordinate
+    theta = torch.rand(num_samples) * 2.0 * np.pi
+    phi = torch.arccos(1.0 - 2.0 * torch.rand(num_samples))
+
+    # from spherical coordinates to Cartesian coordinates
+    x = torch.sin(phi) * torch.cos(theta)
+    y = torch.sin(phi) * torch.sin(theta)
+    z = torch.cos(phi)
+    w = torch.ones(num_samples)
+    xyzw = torch.column_stack((x, y, z, w))
+
+    return xyzw
 
 def get_parallelogram_area(
     p: TensorType["bs":..., 2], v0: TensorType["bs":..., 2], v1: TensorType["bs":..., 2]
@@ -331,6 +422,9 @@ def export_textured_mesh(
     unwrap_method: Literal["xatlas", "custom"] = "xatlas",
     raylen_method: Literal["edge", "none"] = "edge",
     num_pixels_per_side=1024,
+    sh_levels=5,
+    dir_sample_method: Literal["sphere", "cubemap"] = "cubemap",
+    num_sh_samples=15,
 ):
     """Textures a mesh using the radiance field from the Pipeline.
     The mesh is written to an OBJ file in the output directory,
@@ -338,6 +432,9 @@ def export_textured_mesh(
     Operations will occur on the same device as the Pipeline.
 
     Args:
+        sh_levels:
+        num_sh_samples:
+        dir_sample_method:
         mesh: The mesh to texture.
         pipeline: The pipeline to use for texturing.
         output_dir: The directory to write the textured mesh to.
@@ -489,6 +586,90 @@ def export_textured_mesh(
         f"Texture image saved to {output_dir / 'material_0.png'} "
         f"with resolution {texture_image.shape[1]}x{texture_image.shape[0]} (WxH)"
     )
+    # ########################################################################
+    # ########################################################################
+    # Add a for loop to cast multiple rays
+    # ########################################################################
+    # ########################################################################
+    CONSOLE.print("Creating SH coefficient images by rendering with NeRF...")
+    sh_out = torch.zeros(num_pixels_per_side, num_pixels_per_side, 3, sh_levels ** 2).to(device)
+
+    dir_samples = None
+    if dir_sample_method == "sphere":
+        CONSOLE.print("Sampling " + str(num_sh_samples) + " directions uniformly on unit sphere.")
+        dir_samples = sampling_uniform_sphere(num_samples=num_sh_samples)
+        print("\033[A\033[A")
+        CONSOLE.print(
+            "[bold green]:white_check_mark: Sampling " + str(num_sh_samples) + " directions uniformly on unit sphere.")
+    elif dir_sample_method == "cubemap":
+        CONSOLE.print(
+            "Sampling directions uniformly on cube map with " + str(num_sh_samples) + " pixels on each side. " + str(
+                num_sh_samples * num_sh_samples * 6) + " samples total.")
+        dir_samples = sampling_cubemap(map_res=num_sh_samples)
+        print("\033[A\033[A")
+        CONSOLE.print("[bold green]:white_check_mark: Sampling directions uniformly on cube map with " + str(
+            num_sh_samples) + " pixels on each side. " + str(num_sh_samples * num_sh_samples * 6) + " samples total.")
+    else:
+        raise ValueError(f"Sampling directions method {dir_sample_method} not supported.")
+
+    sample_weight_sum = 0.0
+
+    progress = get_progress("Sampling SH coefficients on unit sphere", suffix="samples-per-sec")
+    with progress:
+        for i in progress.track(range(dir_samples.shape[0])):
+            # generate new directions
+            new_dir = dir_samples[i, :3]
+            # normalize to unit vector
+            new_dir = new_dir / torch.linalg.norm(new_dir)
+            directions = new_dir.repeat(num_pixels_per_side, num_pixels_per_side, 1).to(device)
+            # accumulate the sample weight
+            sample_weight = dir_samples[i, 3]
+            # compute the new origins
+            origins_offseted = origins - 0.5 * raylen * directions
+
+            # cast generate ray along the inverse normal direction
+            camera_ray_bundle = RayBundle(
+                origins=origins_offseted,
+                directions=directions,
+                pixel_area=pixel_area,
+                camera_indices=camera_indices,
+                nears=nears,
+                fars=fars,
+                metadata={"directions_norm": directions_norm},
+            )
+
+            with torch.no_grad():
+                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+
+            # project sample (inverse normal direction) to SH coefficients (repeat each of the RGB channel to 9 dimension)
+            rgb = outputs["rgb"].to(device)
+            components = components_from_spherical_harmonics(levels=sh_levels, directions=directions)
+            if sh_levels == 3:
+                sh_out[..., 0, :] += components[..., :] * rgb[..., 0].unsqueeze(-1).repeat(1, 1, 9) * sample_weight
+                sh_out[..., 1, :] += components[..., :] * rgb[..., 1].unsqueeze(-1).repeat(1, 1, 9) * sample_weight
+                sh_out[..., 2, :] += components[..., :] * rgb[..., 2].unsqueeze(-1).repeat(1, 1, 9) * sample_weight
+
+            elif sh_levels == 4:
+                sh_out[..., 0, :] += components[..., :] * rgb[..., 0].unsqueeze(-1).repeat(1, 1, 16) * sample_weight
+                sh_out[..., 1, :] += components[..., :] * rgb[..., 1].unsqueeze(-1).repeat(1, 1, 16) * sample_weight
+                sh_out[..., 2, :] += components[..., :] * rgb[..., 2].unsqueeze(-1).repeat(1, 1, 16) * sample_weight
+
+            elif sh_levels == 5:
+                sh_out[..., 0, :] += components[..., :] * rgb[..., 0].unsqueeze(-1).repeat(1, 1, 25) * sample_weight
+                sh_out[..., 1, :] += components[..., :] * rgb[..., 1].unsqueeze(-1).repeat(1, 1, 25) * sample_weight
+                sh_out[..., 2, :] += components[..., :] * rgb[..., 2].unsqueeze(-1).repeat(1, 1, 25) * sample_weight
+
+            sample_weight_sum += sample_weight
+
+    # normalize SH coefficients
+    sh_out *= 4.0 * np.pi / sample_weight_sum
+
+    texture_sh_image = sh_out.view(sh_out.shape[0], sh_out.shape[1], sh_out.shape[2], sh_out.shape[3]).cpu().numpy()
+    print(texture_sh_image.shape)
+
+    for exr_idx in range(0, sh_out.shape[3]):
+        content = texture_sh_image[:, :, :, exr_idx]
+        imageio.imwrite(os.path.join(str(output_dir), 'my_SH_Texture_' + str(int(exr_idx)) + '.exr'), content)
 
     CONSOLE.rule("[bold green]:tada: :tada: :tada: All DONE :tada: :tada: :tada:")
     for summary in summary_log:
