@@ -493,7 +493,7 @@ def export_textured_mesh(
     pixel_area = torch.ones_like(origins[..., 0:1])
     camera_indices = torch.zeros_like(origins[..., 0:1])
     nears = torch.zeros_like(origins[..., 0:1])
-    fars = torch.ones_like(origins[..., 0:1]) * raylen
+    fars = torch.ones_like(origins[..., 0:1]) * raylen * 2
     directions_norm = torch.ones_like(origins[..., 0:1])  # for surface model
     camera_ray_bundle = RayBundle(
         origins=origins,
