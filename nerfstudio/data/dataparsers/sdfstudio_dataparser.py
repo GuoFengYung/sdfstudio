@@ -36,12 +36,13 @@ from nerfstudio.data.dataparsers.base_dataparser import (
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.utils.images import BasicImages
 from nerfstudio.utils.io import load_from_json
+from nerfstudio.utils.colors import get_color
 
 CONSOLE = Console()
 
 
 def get_src_from_pairs(
-    ref_idx, all_imgs, pairs_srcs, neighbors_num=None, neighbors_shuffle=False
+        ref_idx, all_imgs, pairs_srcs, neighbors_num=None, neighbors_shuffle=False
 ) -> Dict[str, TensorType]:
     # src_idx[0] is ref img
     src_idx = pairs_srcs[ref_idx]
@@ -176,6 +177,8 @@ class SDFStudioDataParserConfig(DataParserConfig):
     """automatically orient the scene such that the up direction is the same as the viewer's up direction"""
     load_dtu_highres: bool = False
     """load high resolution images from DTU dataset, should only be used for the preprocessed DTU dataset"""
+    alpha_color: str = "white"
+    """alpha color of background"""
 
 
 def filter_list(list_to_filter, indices):
@@ -192,7 +195,16 @@ class SDFStudio(DataParser):
 
     config: SDFStudioDataParserConfig
 
+    def __init__(self, config: SDFStudioDataParserConfig):
+        super().__init__(config=config)
+        self.alpha_color = config.alpha_color
+
     def _generate_dataparser_outputs(self, split="train"):  # pylint: disable=unused-argument,too-many-statements
+        if self.alpha_color is not None:
+            alpha_color_tensor = get_color(self.alpha_color)
+        else:
+            alpha_color_tensor = None
+
         # load meta data
         meta = load_from_json(self.config.data / "meta_data.json")
 
@@ -420,6 +432,7 @@ class SDFStudio(DataParser):
             cameras=cameras,
             scene_box=scene_box,
             additional_inputs=additional_inputs_dict,
+            alpha_color=alpha_color_tensor,
             depths=filter_list(depth_images, indices),
             normals=filter_list(normal_images, indices),
         )
