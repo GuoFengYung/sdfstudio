@@ -53,13 +53,16 @@ def main(args):
 
         # load images
         file_path = Path(frame["file_path"])
+        print(file_path)
         img_path = input_dir / "images" / file_path.name
         assert img_path.exists()
         image_paths.append(img_path)
 
         # load sensor depths
-        if args.data_type == "polycam" and args.sensor_depth:
+        if args.data_type ==  "colmap" and args.sensor_depth:
+            #print(input_dir / "depths" / f"{file_path.stem}.png")
             depth_path = input_dir / "depths" / f"{file_path.stem}.png"
+            #print(depth_path)
             assert depth_path.exists()
             depth_paths.append(depth_path)
 
@@ -69,6 +72,7 @@ def main(args):
 
     # Filter invalid poses
     poses = np.array(poses)
+    print(poses[:, :3, 3].shape)
     valid_poses = np.isfinite(poses).all(axis=2).all(axis=1)
     min_vertices = poses[:, :3, 3][valid_poses].min(axis=0)
     max_vertices = poses[:, :3, 3][valid_poses].max(axis=0)
@@ -182,9 +186,13 @@ def main(args):
 
         if args.sensor_depth:
             # load depth
+            #print(depth_paths)
             depth_path = depth_paths[idx]
             out_depth_path = output_dir / f"{out_index:06d}_sensor_depth.png"
             depth = cv2.imread(str(depth_path), -1).astype(np.float32) / 1000.0
+            depth = depth.astype(np.uint8)
+            #depth_path = Image.open(depth_path)
+            #print(out_depth_path)
             depth_PIL = Image.fromarray(depth)
             new_depth = depth_trans(depth_PIL)
             new_depth = np.asarray(new_depth)

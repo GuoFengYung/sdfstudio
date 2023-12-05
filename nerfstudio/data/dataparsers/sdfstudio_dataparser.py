@@ -432,7 +432,7 @@ class SDFStudio(DataParser):
             cameras=cameras,
             scene_box=scene_box,
             additional_inputs=additional_inputs_dict,
-            alpha_color=alpha_color_tensor,
+            #alpha_color=alpha_color_tensor,
             depths=filter_list(depth_images, indices),
             normals=filter_list(normal_images, indices),
         )

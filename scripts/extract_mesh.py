@@ -65,7 +65,7 @@ class ExtractMesh:
         assert str(self.output_path)[-4:] == ".ply"
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        _, pipeline, _ = eval_setup(self.load_config)
+        _, pipeline, _ = eval_setup(self.load_config, test_mode="val")
 
         CONSOLE.print("Extract mesh with marching cubes and may take a while")
 

@@ -251,11 +251,11 @@ method_configs["bakedsdf"] = Config(
         steps_per_eval_batch=1000,
         steps_per_save=1000,
         steps_per_eval_all_images=1000000,  # set to a very large model so we don't eval with all images
-        max_num_iterations=250001,
+        max_num_iterations=250000,
         mixed_precision=False,
     ),
     pipeline=VanillaPipelineConfig(
-        datamanager=DepthDataManagerConfig(
+        datamanager=VanillaDataManagerConfig(
             dataparser=BlenderDataParserConfig(),
             train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=1024,
