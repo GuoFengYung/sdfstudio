@@ -19,7 +19,6 @@ Put all the method implementations in one location.
 from __future__ import annotations
 
 from typing import Dict
-
 import tyro
 
 from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
@@ -1165,15 +1164,15 @@ method_configs["phototourism"] = Config(
     vis="viewer",
 )
 
-all_methods, all_descriptions = method_configs, descriptions
-# Add discovered external methods
-all_methods, all_descriptions = merge_methods(all_methods, all_descriptions, *discover_methods())
-all_methods, all_descriptions = sort_methods(all_methods, all_descriptions)
+
+external_methods, external_descriptions = discover_methods()
+method_configs.update(external_methods)
+descriptions.update(external_descriptions)
 
 
 AnnotatedBaseConfigUnion = tyro.conf.SuppressFixed[  # Don't show unparseable (fixed) arguments in helptext.
     tyro.conf.FlagConversionOff[
-        tyro.extras.subcommand_type_from_defaults(defaults=all_methods, descriptions=all_descriptions)
+        tyro.extras.subcommand_type_from_defaults(defaults=method_configs, descriptions=descriptions)
     ]
 ]
 """Union[] type over config types, annotated with default instances for use with
