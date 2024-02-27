@@ -76,6 +76,8 @@ from nerfstudio.pipelines.base_pipeline import (
     VanillaPipelineConfig,
 )
 from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
+from src.lib.plugins.registry import discover_methods
+
 
 method_configs: Dict[str, Config] = {}
 descriptions = {
@@ -1163,9 +1165,15 @@ method_configs["phototourism"] = Config(
     vis="viewer",
 )
 
+all_methods, all_descriptions = method_configs, descriptions
+# Add discovered external methods
+all_methods, all_descriptions = merge_methods(all_methods, all_descriptions, *discover_methods())
+all_methods, all_descriptions = sort_methods(all_methods, all_descriptions)
+
+
 AnnotatedBaseConfigUnion = tyro.conf.SuppressFixed[  # Don't show unparseable (fixed) arguments in helptext.
     tyro.conf.FlagConversionOff[
-        tyro.extras.subcommand_type_from_defaults(defaults=method_configs, descriptions=descriptions)
+        tyro.extras.subcommand_type_from_defaults(defaults=all_methods, descriptions=all_descriptions)
     ]
 ]
 """Union[] type over config types, annotated with default instances for use with
