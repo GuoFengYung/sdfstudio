@@ -207,8 +207,8 @@ class Config(PrintableConfig):
     """Method name. Required to set in python or via cli"""
     experiment_name: Optional[str] = None
     """Experiment name. If None, will automatically be set to dataset name"""
-    timestamp: str = "{timestamp}"
-    """Experiment timestamp."""
+    # timestamp: str = "{timestamp}"
+    # """Experiment timestamp."""
     machine: MachineConfig = MachineConfig()
     """Machine configuration"""
     logging: LoggingConfig = LoggingConfig()
@@ -245,10 +245,10 @@ class Config(PrintableConfig):
         """Checks if tensorboard is enabled."""
         return "tensorboard" == self.vis
 
-    def set_timestamp(self) -> None:
-        """Dynamically set the experiment timestamp"""
-        if self.timestamp == "{timestamp}":
-            self.timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    # def set_timestamp(self) -> None:
+    #     """Dynamically set the experiment timestamp"""
+    #     if self.timestamp == "{timestamp}":
+    #         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
     def set_experiment_name(self) -> None:
         """Dynamically set the experiment name"""
@@ -260,7 +260,8 @@ class Config(PrintableConfig):
         # check the experiment and method names
         assert self.method_name is not None, "Please set method name in config or via the cli"
         self.set_experiment_name()
-        return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
+        # return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
+        return Path(f"{self.output_dir}/{self.method_name}/{self.experiment_name}/")
 
     def get_checkpoint_dir(self) -> Path:
         """Retrieve the checkpoint directory"""
@@ -276,7 +277,17 @@ class Config(PrintableConfig):
         """Save config to base directory"""
         base_dir = self.get_base_dir()
         assert base_dir is not None
+
+        base_dir_path = base_dir
+        if base_dir_path.exists():
+            raise FileExistsError("Config file already exists. Cannot overwrite.")
+
         base_dir.mkdir(parents=True, exist_ok=True)
         config_yaml_path = base_dir / "config.yml"
         CONSOLE.log(f"Saving config to: {config_yaml_path}")
         config_yaml_path.write_text(yaml.dump(self), "utf8")
+
+    def get_config_yaml_path(self) -> Path:
+        """Return the path where the config YAML file will be saved."""
+        base_dir = self.get_base_dir()
+        return base_dir / "config.yml"

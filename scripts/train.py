@@ -48,7 +48,8 @@ from rich.console import Console
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.configs.config_utils import convert_markup_to_ansi
 from nerfstudio.configs.method_configs import AnnotatedBaseConfigUnion
-from nerfstudio.engine.trainer import Trainer
+# from nerfstudio.engine.trainer import Trainer
+from src.lib.engine.trainer import Trainer
 from nerfstudio.utils import comms, profiler
 
 CONSOLE = Console(width=120)
@@ -220,7 +221,7 @@ def launch(
 def main(config: cfg.Config) -> None:
     """Main function."""
 
-    config.set_timestamp()
+    # config.set_timestamp()
     if config.data:
         CONSOLE.log("Using --data alias for --data.pipeline.datamanager.dataparser.data")
         config.pipeline.datamanager.dataparser.data = config.data
@@ -232,6 +233,7 @@ def main(config: cfg.Config) -> None:
     # print and save config
     config.print_to_terminal()
     config.save_config()
+    yaml_path = config.get_config_yaml_path()
 
     launch(
         main_func=train_loop,
